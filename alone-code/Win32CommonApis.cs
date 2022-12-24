@@ -25,5 +25,7 @@ namespace GeneralKit
         [return: MarshalAsAttribute(UnmanagedType.Bool)]
         public static extern bool CloseHandle(IntPtr handle);
 
+        [DllImport("User32.dll", EntryPoint = "SendMessage")]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
     }
 }

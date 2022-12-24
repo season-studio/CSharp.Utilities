@@ -3,110 +3,192 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
-using System.Linq;
 
 namespace SeasonStudio.Common
 {
-    using JObject = Dictionary<string, JValue>;
     using JArray = List<JValue>;
+    using JObject = Dictionary<string, JValue>;
 
+#if NET6_0_OR_GREATER
+#nullable disable
+#endif
+
+    /// <summary>
+    /// JSON数据封装
+    /// </summary>
     public struct JValue : IEquatable<JValue>
     {
-        private dynamic value;
+        private object value;
 
         #region  构造
-        public JValue(dynamic _value)
+        public JValue(object _value)
         {
             value = null;
-            Set(_value);
+            SetValue(_value, true);
         }
         #endregion
 
         #region 基本访问
-        public void Set(dynamic _value)
+        /// <summary>
+        /// 设置为兼容目标值
+        /// </summary>
+        /// <param name="_value"></param>
+        public void Set(object _value)
         {
-            Type type = _value?.GetType();
-            if (null == type)
+            SetValue(_value, true);
+        }
+
+        /// <summary>
+        /// 设置为兼容目标值
+        /// </summary>
+        /// <param name="_value"></param>
+        /// <param name="_switchArrayAndObject">true表示允许从Object切换到Array</param>
+        private void SetValue(object _value, bool _switchArrayAndObject)
+        {
+            if (null == _value)
             {
                 value = null;
             }
-            else if (_value is JValue)
+            else
             {
-                value = _value.value;
-            }
-            else if (_value is byte[])
-            {
-                value = _value;
-            }
-            else if ((_value is IDictionary) || ((_value is IEnumerable) && (null != type.GetMethod("ContainsKey"))))
-            {
-                // 作为对象初始化
-                value = new JObject();
-                foreach (dynamic item in _value)
+                Type type = _value.GetType();
+                if (_value is JValue jVal)
                 {
-                    value[null != item.Key ? item.Key.ToString() : "null"] = new JValue(item.Value);
+                    value = jVal.value;
                 }
-            }
-            else if (type.FullName.StartsWith("System.Collections.Generic.KeyValuePair`"))
-            {
-                // 作为对象初始化
-                value = new JObject();
-                if (_value is IEnumerable)
+                else if (_value is byte[])
                 {
-                    foreach (dynamic item in _value)
+                    value = _value;
+                }
+                else if (_value is string)
+                {
+                    value = _value;
+                }
+                else if (_value is IDictionary idict)
+                {
+                    var obj = new JObject();
+                    foreach (DictionaryEntry item in idict)
                     {
-                        value[null != item.Key ? item.Key.ToString() : "null"] = new JValue(item.Value);
+                        obj.Add(Convert.ToString(item.Key) ?? "null", new JValue(item.Value));
                     }
+                    value = obj;
+                }
+                else if (_value is IEnumerable enumValues)
+                {
+                    var obj = new JObject();
+                    bool isObj = true;
+                    foreach (object item in enumValues)
+                    {
+                        if (item is ITuple tuple)
+                        {
+                            if (tuple.Length == 2)
+                            {
+                                obj.Add(Convert.ToString(tuple[0]) ?? "null", new JValue(tuple[1]));
+                            }
+                            else if (_switchArrayAndObject)
+                            {
+                                isObj = false;
+                                break;
+                            }
+                        }
+                        else if (item is DictionaryEntry dictEntry)
+                        {
+                            obj.Add(Convert.ToString(dictEntry.Key) ?? "null", new JValue(dictEntry.Value));
+                        }
+                        else if ((null != item) && item.GetType().FullName.StartsWith("System.Collections.Generic.KeyValuePair`"))
+                        {
+                            obj.Add(Convert.ToString(((dynamic)item).Key) ?? "null", new JValue(((dynamic)item).Value));
+                        }
+                        else if (_switchArrayAndObject)
+                        {
+                            isObj = false;
+                            break;
+                        }
+                    }
+                    if (isObj)
+                    {
+                        value = obj;
+                    }
+                    else
+                    {
+                        value = Array(enumValues).value;
+                    }
+                }
+                else if (_value is ITuple tuple)
+                {
+                    var list = new JArray();
+                    int count = tuple.Length;
+                    for (int i = 0; i < count; i++)
+                    {
+                        list.Add(new JValue(tuple[i]));
+                    }
+                    value = list;
+                }
+                else if (_value is DictionaryEntry dictEntry)
+                {
+                    var obj = new JObject
+                    {
+                        { Convert.ToString(dictEntry.Key) ?? "null", new JValue(dictEntry.Value) }
+                    };
+                    value = obj;
+                }
+                else if (type.FullName.StartsWith("System.Collections.Generic.KeyValuePair`"))
+                {
+                    var obj = new JObject
+                    {
+                        { Convert.ToString(((dynamic)_value).Key) ?? "null", new JValue(((dynamic)_value).Value) }
+                    };
+                    value = obj;
+                }
+                else if ((_value is bool) || (_value is decimal))
+                {
+                    value = _value;
+                }
+                else if (type.IsPrimitive)
+                {
+                    value = Convert.ToDecimal(_value);
+                }
+                else if (_value is Color colorVal)
+                {
+                    value = (decimal)colorVal.ToArgb();
+                }
+                else if (type.IsValueType)
+                {
+                    var obj = new JObject();
+                    foreach (var fieldDef in type.GetFields())
+                    {
+                        var field = fieldDef.GetValue(_value);
+                        obj.Add(fieldDef.Name, new JValue(field));
+                    }
+                    value = obj;
                 }
                 else
                 {
-                    value[null != _value.Key ? _value.Key.ToString() : "null"] = new JValue(_value.Value);
+                    value = _value.ToString();
                 }
-            }
-            else if (_value is string)
-            {
-                value = _value;
-            }
-            else if (_value is IEnumerable)
-            {
-                // 作为数组
-                value = new JArray();
-                foreach (dynamic item in _value)
-                {
-                    value.Add(new JValue(item));
-                }
-            }
-            else if ((_value is bool) || (_value is decimal))
-            {
-                value = _value;
-            }
-            else if (type.IsPrimitive)
-            {
-                value = (decimal)_value;
-            }
-            else if (_value is Color)
-            {
-                value = (decimal)_value.ToArgb();
-            }
-            else
-            {
-                value = _value.ToString();
             }
         }
 
-        public dynamic this[string _key]
+        /// <summary>
+        /// 按照Object的方式取子项内容
+        /// </summary>
+        /// <param name="_key"></param>
+        /// <returns></returns>
+        public JValue this[string _key]
         {
             get
             {
                 try
                 {
                     JValue item;
-                    return (value is JObject)
-                            ? (value.TryGetValue(_key, out item) ? item : Null())
+                    return (value is JObject obj)
+                            ? (obj.TryGetValue(_key, out item) ? item : Null())
                             : Null();
                 }
                 catch
@@ -122,17 +204,22 @@ namespace SeasonStudio.Common
                     this.value = new JObject();
                 }
 
-                this.value[_key] = (value is JValue) ? value : new JValue(value);
+                ((JObject)this.value)[_key] = value;
             }
         }
 
-        public dynamic this[int _index]
+        /// <summary>
+        /// 按照Array的方式取子项内容
+        /// </summary>
+        /// <param name="_index"></param>
+        /// <returns></returns>
+        public JValue this[int _index]
         {
             get
             {
                 try
                 {
-                    return (value is JArray) ? value[_index] : this[_index.ToString()];
+                    return (value is JArray arr) ? arr[_index] : this[_index.ToString()];
                 }
                 catch
                 {
@@ -153,13 +240,89 @@ namespace SeasonStudio.Common
                         this.value = new JArray();
                     }
 
-                    if (_index >= 0)
+                    if ((_index >= 0) && (this.value is JArray arr))
                     {
-                        while (_index >= this.value.Count)
+                        while (_index >= arr.Count)
                         {
-                            this.value.Add(Null());
+                            arr.Add(Null());
                         }
-                        this.value[_index] = (value is JValue) ? value : new JValue(value);
+                        arr[_index] = value;
+                    }
+                }
+            }
+        }
+
+        public JValue Get(object _key, bool _always = false)
+        {
+            if (_always)
+            {
+                if (_key is string keyText)
+                {
+                    AsObject();
+                    if (value is JObject obj)
+                    {
+                        if (!obj.ContainsKey(keyText))
+                        {
+                            var newVal = Null();
+                            obj[keyText] = newVal;
+                            return newVal;
+                        }
+                        else
+                        {
+                            return obj[keyText];
+                        }
+                    }
+                    return Null();
+                }
+                else
+                {
+                    try
+                    {
+                        int index = Convert.ToInt32(_key);
+                        AsArray();
+                        if ((index >= 0) && (value is JArray list))
+                        {
+                            if (index >= list.Count)
+                            {
+                                for (int i = list.Count; i < index; i++)
+                                {
+                                    list.Add(Null());
+                                }
+                                var newVal = Null();
+                                list.Add(newVal);
+                                return newVal;
+                            }
+                            else
+                            {
+                                return list[index];
+                            }
+                        }
+                        else
+                        {
+                            return Get(Convert.ToString(_key) ?? string.Empty, true);
+                        }
+                    }
+                    catch
+                    {
+                        return Get(Convert.ToString(_key) ?? string.Empty, true);
+                    }
+                }
+            }
+            else
+            {
+                if (_key is string keyText)
+                {
+                    return this[keyText];
+                }
+                else
+                {
+                    try
+                    {
+                        return this[Convert.ToInt32(_key)];
+                    }
+                    catch
+                    {
+                        return this[Convert.ToString(_key)??string.Empty];
                     }
                 }
             }
@@ -172,7 +335,7 @@ namespace SeasonStudio.Common
         {
             get
             {
-                return (value is ICollection) ? value.Count : 0;
+                return (value is ICollection coll) ? coll.Count : 0;
             }
         }
 
@@ -188,21 +351,21 @@ namespace SeasonStudio.Common
 
             set
             {
-                if (this.value is JArray)
+                if (this.value is JArray arr)
                 {
-                    if (value < this.value.Count)
+                    if (value < arr.Count)
                     {
                         if (value < 0)
                         {
                             value = 0;
                         }
-                        this.value.RemoveRange(value, this.value.Count - value);
+                        arr.RemoveRange(value, arr.Count - value);
                     }
                     else
                     {
-                        while (value >= this.value.Count)
+                        while (value >= arr.Count)
                         {
-                            this.value.Add(Null());
+                            arr.Add(Null());
                         }
                     }
                 }
@@ -220,6 +383,9 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 判断是否是Null值
+        /// </summary>
         public bool IsNull
         {
             get
@@ -228,6 +394,9 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 判断是否是数组
+        /// </summary>
         public bool IsArray
         {
             get
@@ -236,6 +405,9 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 判断是否是Object
+        /// </summary>
         public bool IsObject
         {
             get
@@ -244,6 +416,9 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 判断是否是字符串
+        /// </summary>
         public bool IsString
         {
             get
@@ -252,6 +427,9 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 判断是否是数值
+        /// </summary>
         public bool IsNumber
         {
             get
@@ -260,6 +438,9 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 判断是否是存储buffer
+        /// </summary>
         public bool IsBuffer
         {
             get
@@ -268,58 +449,63 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 判断是否为空，包括null值、Object无子项、数组无内容、空字符串等
+        /// </summary>
         public bool IsEmpty
         {
             get
             {
                 return (null == value)
-                        || ((value is string) && string.IsNullOrEmpty(value))
-                        || ((value is ICollection) && (0 == value.Count));
+                        || ((value is string str) && string.IsNullOrEmpty(str))
+                        || ((value is ICollection coll) && (0 == coll.Count));
             }
         }
 
+        /// <summary>
+        /// 生成一个Null值
+        /// </summary>
+        /// <returns></returns>
         public static JValue Null()
         {
             return new JValue() { value = null };
         }
 
-        public static JValue Object(dynamic _src = null)
+        /// <summary>
+        /// 生成一个Object
+        /// </summary>
+        /// <param name="_src"></param>
+        /// <returns></returns>
+        public static JValue Object(object _src = null)
         {
-            JObject obj = new JObject();
+            JValue obj = Null();
             if (null != _src)
             {
-                if ((_src is IDictionary)
-                    || ((_src is IEnumerable) && (null != _src.GetType().GetMethod("ContainsKey"))))
+                obj.SetValue(_src, false);
+                if (!obj.IsObject)
                 {
-                    foreach (dynamic item in _src)
-                    {
-                        obj[null != item.Key ? item.Key.ToString() : "null"] = new JValue(item.Value);
-                    }
-                }
-                else if (_src.GetType().FullName.StartsWith("System.Collections.Generic.KeyValuePair`"))
-                {
-                    if (_src is IEnumerable)
-                    {
-                        foreach (dynamic item in _src)
-                        {
-                            obj[null != item.Key ? item.Key.ToString() : "null"] = new JValue(item.Value);
-                        }
-                    }
-                    else
-                    {
-                        obj[null != _src.Key ? _src.Key.ToString() : "null"] = new JValue(_src.Value);
-                    }
+                    obj.AsObject();
                 }
             }
-            return new JValue() { value = new JObject() };
+            else
+            {
+                obj.value = new JObject();
+            }
+
+            return obj;
         }
 
+        /// <summary>
+        /// 生成一个数组
+        /// </summary>
+        /// <param name="_src"></param>
+        /// <returns></returns>
         public static JValue Array(IEnumerable _src = null)
         {
             JArray list = new JArray();
             if (null != _src)
             {
-                foreach (dynamic item in _src)
+                foreach (object item in _src)
                 {
                     list.Add(new JValue(item));
                 }
@@ -329,6 +515,10 @@ namespace SeasonStudio.Common
         #endregion
 
         #region 数组方法
+        /// <summary>
+        /// 将值替换为数组
+        /// </summary>
+        /// <returns></returns>
         public JValue AsArray()
         {
             if (!(value is JArray))
@@ -338,18 +528,27 @@ namespace SeasonStudio.Common
             return this;
         }
 
-        public void Push(dynamic _value, bool _force = false)
+        /// <summary>
+        /// 在尾部添加数据
+        /// </summary>
+        /// <param name="_value"></param>
+        /// <param name="_force">若为false则如果当前结构内不是数组，则不做操作，否则则强制转换为数组</param>
+        public void Push(object _value, bool _force = false)
         {
             if (!(value is JArray) && _force)
             {
                 value = new JArray();
             }
-            if (value is JArray)
+            if (value is JArray arr)
             {
-                value.Add(new JValue(_value));
+                arr.Add(new JValue(_value));
             }
         }
 
+        /// <summary>
+        /// 从尾部取得一个数据，并将之删除
+        /// </summary>
+        /// <returns></returns>
         public JValue Pop()
         {
             JValue ret = Null();
@@ -367,18 +566,27 @@ namespace SeasonStudio.Common
             return ret;
         }
 
-        public void Unshift(dynamic _value, bool _force = false)
+        /// <summary>
+        /// 在头部插入一个数据
+        /// </summary>
+        /// <param name="_value"></param>
+        /// <param name="_force">若为false则如果当前结构内不是数组，则不做操作，否则则强制转换为数组</param>
+        public void Unshift(object _value, bool _force = false)
         {
             if (!(value is JArray) && _force)
             {
                 value = new JArray();
             }
-            if (value is JArray)
+            if (value is JArray arr)
             {
-                value.Insert(0, new JValue(_value));
+                arr.Insert(0, new JValue(_value));
             }
         }
 
+        /// <summary>
+        /// 从头部取得一个数据，并将之删除
+        /// </summary>
+        /// <returns></returns>
         public JValue Shift()
         {
             JValue ret = Null();
@@ -395,6 +603,10 @@ namespace SeasonStudio.Common
             return ret;
         }
 
+        /// <summary>
+        /// 取得首个数据
+        /// </summary>
+        /// <returns></returns>
         public JValue? FirstItem()
         {
             if ((value is JArray list) && (list.Count > 0))
@@ -407,6 +619,10 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 取得最后的数据
+        /// </summary>
+        /// <returns></returns>
         public JValue? LastItem()
         {
             if ((value is JArray list) && (list.Count > 0))
@@ -418,9 +634,74 @@ namespace SeasonStudio.Common
                 return null;
             }
         }
+
+        /// <summary>
+        /// 检索数据位置
+        /// </summary>
+        /// <param name="_value"></param>
+        /// <returns></returns>
+        public int IndexOf(object _value)
+        {
+            return (value is JArray list) ? list.FindIndex(e => e.Equals(_value)) : -1;
+        }
+
+        /// <summary>
+        /// 删除数据
+        /// </summary>
+        /// <param name="_value"></param>
+        public void Remove(object _value)
+        {
+            if (value is JArray list)
+            {
+                int index = IndexOf(_value);
+                if (index >= 0)
+                {
+                    list.RemoveAt(index);
+                }
+            }
+        }
+
+        public void Concat(object _value)
+        {
+            AsArray();
+            if (value is JArray list)
+            {
+                if (_value is JValue jVal)
+                {
+                    if (jVal.IsArray)
+                    {
+                        list.AddRange(jVal.GetArrayItems());
+                    }
+                }
+                else if (_value is IEnumerable enumSet)
+                {
+                    list.AddRange(enumSet.Cast<object>().Select(e => e is JValue ? (JValue)e : new JValue(e)));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 排序
+        /// </summary>
+        /// <param name="_compareFn"></param>
+        public void Sort(Func<JValue, JValue, int> _compareFn)
+        {
+            if (value is JArray list)
+            {
+                list.Sort((a, b) =>
+                {
+                    return _compareFn(a, b);
+                });
+            }
+        }
+
         #endregion
 
         #region 对象方法
+        /// <summary>
+        /// 将值强制替换为Object
+        /// </summary>
+        /// <returns></returns>
         public JValue AsObject()
         {
             if (!(value is JObject))
@@ -437,8 +718,8 @@ namespace SeasonStudio.Common
         /// <returns></returns>
         public bool ContainsKey(string _key)
         {
-            return (value is JObject)
-                    ? value.ContainsKey(_key)
+            return (value is JObject obj)
+                    ? obj.ContainsKey(_key)
                     : false;
         }
 
@@ -457,6 +738,10 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 取得首个子项
+        /// </summary>
+        /// <returns></returns>
         public KeyValuePair<string, JValue>? FirstChild()
         {
             if ((value is JObject dict) && (dict.Count > 0))
@@ -469,6 +754,10 @@ namespace SeasonStudio.Common
             }
         }
 
+        /// <summary>
+        /// 取得最后的子项
+        /// </summary>
+        /// <returns></returns>
         public KeyValuePair<string, JValue>? LastChild()
         {
             if ((value is JObject dict) && (dict.Count > 0))
@@ -487,11 +776,11 @@ namespace SeasonStudio.Common
         /// Get an enumerator for the children of the object value
         /// </summary>
         /// <returns></returns>
-        public IEnumerable<KeyValuePair<string, JValue>> GetChildren()
+        public IEnumerable<KeyValuePair<string, JValue>> GetObjectItems()
         {
-            if (value is JObject)
+            if (value is JObject obj)
             {
-                foreach (KeyValuePair<string, JValue> item in value)
+                foreach (KeyValuePair<string, JValue> item in obj)
                 {
                     yield return item;
                 }
@@ -504,9 +793,9 @@ namespace SeasonStudio.Common
         /// <returns></returns>
         public IEnumerable<JValue> GetArrayItems()
         {
-            if (value is JArray)
+            if (value is JArray arr)
             {
-                foreach (JValue item in value)
+                foreach (JValue item in arr)
                 {
                     yield return item;
                 }
@@ -517,26 +806,41 @@ namespace SeasonStudio.Common
         /// Get an enumerator for the items of the value
         /// </summary>
         /// <returns></returns>
-        public IEnumerable<KeyValuePair<dynamic, JValue>> GetItems()
+        public IEnumerable<KeyValuePair<object, JValue>> GetItems()
         {
-            if (value is JObject)
+            if (value is JObject obj)
             {
-                foreach (KeyValuePair<string, JValue> item in value)
+                foreach (KeyValuePair<string, JValue> item in obj)
                 {
-                    yield return new KeyValuePair<dynamic, JValue>(item.Key, item.Value);
+                    yield return new KeyValuePair<object, JValue>(item.Key, item.Value);
                 }
             }
-            else if (value is JArray)
+            else if (value is JArray arr)
             {
                 int index = 0;
-                foreach (JValue item in value)
+                foreach (JValue item in arr)
                 {
-                    yield return new KeyValuePair<dynamic, JValue>(index++, item);
+                    yield return new KeyValuePair<object, JValue>(index++, item);
                 }
             }
             else
             {
-                yield return new KeyValuePair<dynamic, JValue>(null, this);
+                yield return new KeyValuePair<object, JValue>(null, this);
+            }
+        }
+
+        /// <summary>
+        /// 清除所有子项数据
+        /// </summary>
+        public void ClearItems()
+        {
+            if (value is JObject obj)
+            {
+                obj.Clear();
+            }
+            else if (value is JArray arr)
+            {
+                arr.Clear();
             }
         }
         #endregion
@@ -544,12 +848,12 @@ namespace SeasonStudio.Common
         #region 对比类方法
         public override bool Equals(object _obj)
         {
-            return EqualityComparer<dynamic>.Default.Equals(value, (_obj is JValue) ? ((JValue)_obj).value : _obj);
+            return EqualityComparer<object>.Default.Equals(value, (_obj is JValue) ? ((JValue)_obj).value : (new JValue(_obj)).value);
         }
 
         public bool Equals(JValue _other)
         {
-            return EqualityComparer<dynamic>.Default.Equals(value, _other.value);
+            return EqualityComparer<object>.Default.Equals(value, _other.value);
         }
 
         public override int GetHashCode()
@@ -591,7 +895,7 @@ namespace SeasonStudio.Common
         #endregion
 
         #region 转换类方法
-        public dynamic ToRawValue<T, TRef>(Func<JValue, TRef, ValueTuple<bool, T>> _fn = null, TRef _customData = default)
+        public object ToRawValue<T, TRef>(Func<JValue, TRef, ValueTuple<bool, T>> _fn = null, TRef _customData = default)
         {
             if (null != _fn)
             {
@@ -706,20 +1010,16 @@ namespace SeasonStudio.Common
                 return 0;
             }
 
-            dynamic val = _value.value;
+            object val = _value.value;
             int ret;
 
-            if (val is decimal)
+            if (val.GetType().IsPrimitive)
             {
-                ret = (int)val;
-            }
-            else if (val is bool)
-            {
-                ret = val ? 1 : 0;
+                ret = Convert.ToInt32(val);
             }
             else
             {
-                string sVal = (val is string) ? val.Trim() : val.ToString().Trim();
+                string sVal = Convert.ToString(val)?.Trim() ?? string.Empty;
                 if (sVal.StartsWith("0x"))
                 {
                     if (!int.TryParse(sVal.Substring(2), NumberStyles.HexNumber, CultureInfo.CurrentCulture, out ret))
@@ -728,6 +1028,43 @@ namespace SeasonStudio.Common
                     }
                 }
                 else if (!int.TryParse(sVal, out ret))
+                {
+                    ret = 0;
+                }
+            }
+
+            return ret;
+        }
+
+        /// <summary>
+        /// convert to uint
+        /// </summary>
+        /// <param name="_value"></param>
+        public static implicit operator uint(JValue _value)
+        {
+            if (null == _value.value)
+            {
+                return 0;
+            }
+
+            object val = _value.value;
+            uint ret;
+
+            if (val.GetType().IsPrimitive)
+            {
+                ret = Convert.ToUInt32(val);
+            }
+            else
+            {
+                string sVal = Convert.ToString(val)?.Trim() ?? string.Empty;
+                if (sVal.StartsWith("0x"))
+                {
+                    if (!uint.TryParse(sVal.Substring(2), NumberStyles.HexNumber, CultureInfo.CurrentCulture, out ret))
+                    {
+                        ret = 0;
+                    }
+                }
+                else if (!uint.TryParse(sVal, out ret))
                 {
                     ret = 0;
                 }
@@ -747,20 +1084,16 @@ namespace SeasonStudio.Common
                 return 0;
             }
 
-            dynamic val = _value.value;
+            object val = _value.value;
             float ret;
 
-            if (val is decimal)
+            if (val.GetType().IsPrimitive)
             {
-                ret = (float)val;
-            }
-            else if (val is bool)
-            {
-                ret = val ? 1 : 0;
+                ret = Convert.ToSingle(val);
             }
             else
             {
-                string sVal = (val is string) ? val : val.ToString();
+                string sVal = Convert.ToString(val)?.Trim() ?? string.Empty;
                 if (!float.TryParse(sVal, NumberStyles.Float, CultureInfo.CurrentCulture, out ret))
                 {
                     ret = 0;
@@ -781,20 +1114,16 @@ namespace SeasonStudio.Common
                 return 0;
             }
 
-            dynamic val = _value.value;
+            object val = _value.value;
             double ret;
 
-            if (val is decimal)
+            if (val.GetType().IsPrimitive)
             {
-                ret = (double)val;
-            }
-            else if (val is bool)
-            {
-                ret = val ? 1 : 0;
+                ret = Convert.ToDouble(val);
             }
             else
             {
-                string sVal = (val is string) ? val : val.ToString();
+                string sVal = Convert.ToString(val)?.Trim() ?? string.Empty;
                 if (!double.TryParse(sVal, NumberStyles.Float, CultureInfo.CurrentCulture, out ret))
                 {
                     ret = 0;
@@ -815,20 +1144,16 @@ namespace SeasonStudio.Common
                 return 0;
             }
 
-            dynamic val = _value.value;
+            object val = _value.value;
             decimal ret;
 
-            if (val is decimal)
+            if (val.GetType().IsPrimitive)
             {
-                ret = val;
-            }
-            else if (val is bool)
-            {
-                ret = val ? 1 : 0;
+                ret = Convert.ToDecimal(val);
             }
             else
             {
-                string sVal = (val is string) ? val : val.ToString();
+                string sVal = Convert.ToString(val)?.Trim() ?? string.Empty;
                 if (!decimal.TryParse(sVal, NumberStyles.Float, CultureInfo.CurrentCulture, out ret))
                 {
                     ret = 0;
@@ -847,7 +1172,7 @@ namespace SeasonStudio.Common
         {
             return (null == _value.value)
                         ? null
-                        : ((_value.value is string) ? _value.value : _value.ToString(string.Empty, string.Empty, string.Empty));
+                        : ((_value.value is string str) ? str : _value.ToString(string.Empty, string.Empty, string.Empty));
         }
 
         /// <summary>
@@ -872,17 +1197,17 @@ namespace SeasonStudio.Common
             {
                 ret = false;
             }
-            else if (value is bool)
+            else if (value is bool bVal)
             {
-                ret = value;
+                ret = bVal;
             }
-            else if (value is decimal)
+            else if (value is decimal dVal)
             {
-                ret = (value != 0);
+                ret = (dVal != 0);
             }
             else
             {
-                string sVal = (value is string) ? value : value.ToString();
+                string sVal = (value is string str) ? str : value.ToString();
                 if (_strictString)
                 {
                     if (!bool.TryParse(sVal, out ret))
@@ -930,13 +1255,13 @@ namespace SeasonStudio.Common
             {
                 string nextPrefix = _prefix + _space;
 
-                if (value is JObject)
+                if (value is JObject obj)
                 {
-                    if (value.Count > 0)
+                    if (obj.Count > 0)
                     {
                         string midSpec = (string.IsNullOrEmpty(_space) ? ":" : ": ");
                         List<string> list = new List<string>();
-                        foreach (KeyValuePair<string, JValue> item in value)
+                        foreach (KeyValuePair<string, JValue> item in obj)
                         {
                             list.Add($"\"{item.Key}\"{midSpec}{item.Value.ToString(nextPrefix, _space, _breakLine)}");
                         }
@@ -947,12 +1272,12 @@ namespace SeasonStudio.Common
                         ret = "{}";
                     }
                 }
-                else if (value is JArray)
+                else if (value is JArray arr)
                 {
-                    if (value.Count > 0)
+                    if (arr.Count > 0)
                     {
                         List<string> list = new List<string>();
-                        foreach (JValue item in value)
+                        foreach (JValue item in arr)
                         {
                             list.Add(item.ToString(nextPrefix, _space, _breakLine));
                         }
@@ -967,9 +1292,9 @@ namespace SeasonStudio.Common
                 {
                     ret = ((bool)value) ? "true" : "false";
                 }
-                else if (value is string)
+                else if (value is string str)
                 {
-                    ret = "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+                    ret = "\"" + str.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
                 }
                 else
                 {
@@ -995,13 +1320,73 @@ namespace SeasonStudio.Common
             return new JValue(value);
         }
 
+        public static implicit operator JValue(int value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(uint value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(short value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(ushort value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(byte value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(sbyte value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(float value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(double value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(long value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(ulong value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(Color value)
+        {
+            return new JValue(value);
+        }
+
+        public static implicit operator JValue(byte[] value)
+        {
+            return new JValue(value);
+        }
+
         /// <summary>
         /// init data from a XMLNode
         /// </summary>
         /// <param name="_xmlNode"></param>
         private void FromXML(XmlNode _xmlNode)
         {
-            string type = _xmlNode.Attributes["type"].Value;
+            string type = _xmlNode.Attributes?["type"]?.Value;
             if (type == "object")
             {
                 JObject dict = new JObject();
@@ -1011,13 +1396,13 @@ namespace SeasonStudio.Common
                     string name = node.LocalName;
                     if (!string.IsNullOrWhiteSpace(prefix))
                     {
-                        name = node.Attributes[name].Value;
+                        name = (node.Attributes?[name]?.Value ?? name);
                     }
                     JValue itemValue = new JValue();
                     itemValue.FromXML(node);
                     dict.Add(name, itemValue);
                 }
-                Set(dict);
+                value = dict;
             }
             else if (type == "array")
             {
@@ -1028,11 +1413,11 @@ namespace SeasonStudio.Common
                     itemValue.FromXML(node);
                     list.Add(itemValue);
                 }
-                Set(list);
+                value = list;
             }
             else if (type == "boolean")
             {
-                Set(0 == string.Compare(_xmlNode.InnerText, "true", StringComparison.OrdinalIgnoreCase));
+                SetValue(0 == string.Compare(_xmlNode.InnerText, "true", StringComparison.OrdinalIgnoreCase), false);
             }
             else if (type == "number")
             {
@@ -1040,7 +1425,7 @@ namespace SeasonStudio.Common
                 decimal ret = 0M;
                 if (valueText.StartsWith("0x"))
                 {
-                    decimal.TryParse(valueText[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ret);
+                    decimal.TryParse(valueText.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ret);
                 }
                 else
                 {
@@ -1067,7 +1452,11 @@ namespace SeasonStudio.Common
             XmlDictionaryReader reader = JsonReaderWriterFactory.CreateJsonReader(Encoding.UTF8.GetBytes(_szJson), XmlDictionaryReaderQuotas.Max);
             XmlDocument doc = new XmlDocument();
             doc.Load(reader);
-            FromXML(doc.DocumentElement);
+            var docElement = doc.DocumentElement;
+            if (null != docElement)
+            {
+                FromXML(docElement);
+            }
         }
 
         /// <summary>
@@ -1108,7 +1497,7 @@ namespace SeasonStudio.Common
         /// </summary>
         /// <param name="_value"></param>
         /// <returns></returns>
-        private static dynamic ProbeValueFromString(string _value)
+        private static object ProbeValueFromString(string _value)
         {
             if (null != _value)
             {
@@ -1116,7 +1505,7 @@ namespace SeasonStudio.Common
                 {
                     return _value.Substring(1, _value.Length - 2);
                 }
-                else if (_value.StartsWith("0x") && decimal.TryParse(_value[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out decimal mHex))
+                else if (_value.StartsWith("0x") && decimal.TryParse(_value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out decimal mHex))
                 {
                     return mHex;
                 }
@@ -1153,7 +1542,7 @@ namespace SeasonStudio.Common
         {
             if (_value1.IsNumber)
             {
-                return new JValue((decimal)(_value1.value) + _value2);
+                return new JValue((decimal)_value1 + _value2);
             }
             else
             {
@@ -1164,7 +1553,7 @@ namespace SeasonStudio.Common
         public static JValue operator -(JValue _value1, decimal _value2)
         {
             if (!_value1.IsNumber)
-                {
+            {
                 return _value1;
             }
             else
@@ -1245,7 +1634,7 @@ namespace SeasonStudio.Common
             JValue ret = new JValue();
             if (!_deep)
             {
-                ret.Set(value);
+                ret.SetValue(this, true);
             }
             else if (value is JObject dict)
             {
@@ -1267,49 +1656,81 @@ namespace SeasonStudio.Common
             }
             else
             {
-                ret.Set(value);
+                ret.SetValue(value, true);
             }
 
             return ret;
         }
 
+        public void Set(string _key, object _data)
+        {
+            this[_key] = (_data is JValue) ? (JValue)_data : new JValue(_data);
+        }
+
+        public void Set(int _index, object _data)
+        {
+            this[_index] = (_data is JValue) ? (JValue)_data : new JValue(_data);
+        }
+
         public void Assign(JValue _other)
         {
-        if (_other.value is JObject srcDict)
+            if (_other.value is JObject srcDict)
             {
                 AsObject();
-                foreach (KeyValuePair<string, JValue> item in srcDict)
+                if (value is JObject targetDict)
                 {
-                    JValue oriItem = this[item.Key];
-                    if (null == oriItem)
+                    foreach (KeyValuePair<string, JValue> item in srcDict)
                     {
-                        value[item.Key] = item.Value;
-                    }
-                    else
-                    {
-                        oriItem.Assign(item.Value);
+                        JValue oriItem = this[item.Key];
+                        if (oriItem.IsNull)
+                        {
+                            targetDict[item.Key] = item.Value;
+                        }
+                        else
+                        {
+                            oriItem.Assign(item.Value);
+                        }
                     }
                 }
             }
             else if (_other.value is JArray srcList)
             {
-                if (!IsObject)
+                int index = 0;
+                if (value is JObject targetDict)
+                {
+                    foreach (JValue item in srcList)
+                    {
+                        JValue oriItem = this[index];
+                        if (oriItem.IsNull)
+                        {
+                            targetDict[index.ToString()] = item;
+                        }
+                        else
+                        {
+                            oriItem.Assign(item);
+                        }
+                        index++;
+                    }
+                }
+                else
                 {
                     AsArray();
-                }
-                int index = 0;
-                foreach (JValue item in srcList)
-                {
-                    JValue oriItem = this[index];
-                    if (null == oriItem)
+                    if (value is JArray targetList)
                     {
-                        value[index] = item;
+                        foreach (JValue item in srcList)
+                        {
+                            JValue oriItem = this[index];
+                            if (oriItem.IsNull)
+                            {
+                                targetList[index] = item;
+                            }
+                            else
+                            {
+                                oriItem.Assign(item);
+                            }
+                            index++;
+                        }
                     }
-                    else
-                    {
-                        oriItem.Assign(item);
-                    }
-                    index++;
                 }
             }
             else
@@ -1343,7 +1764,7 @@ namespace SeasonStudio.Common
                         Match match = prefixRegex.Match(compositions[0]);
                         if (match.Success)
                         {
-                            ret[compositions[0].Substring(match.Length)] = ((compositions.Length > 1) ? ProbeValueFromString(compositions[1]) : (dynamic)true);
+                            ret[compositions[0].Substring(match.Length)] = new JValue((compositions.Length > 1) ? ProbeValueFromString(compositions[1]) : true);
                         }
                     }
                 }
@@ -1352,7 +1773,7 @@ namespace SeasonStudio.Common
                     foreach (string item in _args)
                     {
                         string[] compositions = item.Split('=');
-                        ret[compositions[0]] = ((compositions.Length > 1) ? ProbeValueFromString(compositions[1]) : (dynamic)true);
+                        ret[compositions[0]] = new JValue((compositions.Length > 1) ? ProbeValueFromString(compositions[1]) : true);
                     }
                 }
 
@@ -1361,4 +1782,7 @@ namespace SeasonStudio.Common
         }
         #endregion
     }
+#if NET6_0_OR_GREATER
+#nullable restore
+#endif
 }
