@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
@@ -75,7 +77,7 @@ namespace SeasonStudio.Common
                     var obj = new JObject();
                     foreach (DictionaryEntry item in idict)
                     {
-                        obj.Add(Convert.ToString(item.Key) ?? "null", new JValue(item.Value));
+                        obj[Convert.ToString(item.Key) ?? "null"] = new JValue(item.Value);
                     }
                     value = obj;
                 }
@@ -89,7 +91,7 @@ namespace SeasonStudio.Common
                         {
                             if (tuple.Length == 2)
                             {
-                                obj.Add(Convert.ToString(tuple[0]) ?? "null", new JValue(tuple[1]));
+                                obj[Convert.ToString(tuple[0]) ?? "null"] = new JValue(tuple[1]);
                             }
                             else if (_switchArrayAndObject)
                             {
@@ -99,11 +101,11 @@ namespace SeasonStudio.Common
                         }
                         else if (item is DictionaryEntry dictEntry)
                         {
-                            obj.Add(Convert.ToString(dictEntry.Key) ?? "null", new JValue(dictEntry.Value));
+                            obj[Convert.ToString(dictEntry.Key) ?? "null"] = new JValue(dictEntry.Value);
                         }
                         else if ((null != item) && item.GetType().FullName.StartsWith("System.Collections.Generic.KeyValuePair`"))
                         {
-                            obj.Add(Convert.ToString(((dynamic)item).Key) ?? "null", new JValue(((dynamic)item).Value));
+                            obj[Convert.ToString(((dynamic)item).Key) ?? "null"] = new JValue(((dynamic)item).Value);
                         }
                         else if (_switchArrayAndObject)
                         {
@@ -191,8 +193,9 @@ namespace SeasonStudio.Common
                             ? (obj.TryGetValue(_key, out item) ? item : Null())
                             : Null();
                 }
-                catch
+                catch (Exception err)
                 {
+                    Trace.TraceWarning(err.ToString());
                     return Null();
                 }
             }
@@ -221,8 +224,9 @@ namespace SeasonStudio.Common
                 {
                     return (value is JArray arr) ? arr[_index] : this[_index.ToString()];
                 }
-                catch
+                catch (Exception err)
                 {
+                    Trace.TraceWarning(err.ToString());
                     return Null();
                 }
             }
@@ -302,8 +306,9 @@ namespace SeasonStudio.Common
                             return Get(Convert.ToString(_key) ?? string.Empty, true);
                         }
                     }
-                    catch
+                    catch (Exception err)
                     {
+                        Trace.TraceWarning(err.ToString());
                         return Get(Convert.ToString(_key) ?? string.Empty, true);
                     }
                 }
@@ -320,8 +325,9 @@ namespace SeasonStudio.Common
                     {
                         return this[Convert.ToInt32(_key)];
                     }
-                    catch
+                    catch (Exception err)
                     {
+                        Trace.TraceWarning(err.ToString());
                         return this[Convert.ToString(_key)??string.Empty];
                     }
                 }
@@ -1400,7 +1406,7 @@ namespace SeasonStudio.Common
                     }
                     JValue itemValue = new JValue();
                     itemValue.FromXML(node);
-                    dict.Add(name, itemValue);
+                    dict[name] = itemValue;
                 }
                 value = dict;
             }
@@ -1486,7 +1492,7 @@ namespace SeasonStudio.Common
             }
             catch (Exception err)
             {
-                System.Diagnostics.Trace.WriteLine(err.ToString());
+                Trace.TraceWarning(err.ToString());
                 _json = Null();
                 return false;
             }
