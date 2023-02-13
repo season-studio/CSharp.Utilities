@@ -1300,7 +1300,25 @@ namespace SeasonStudio.Common
                 }
                 else if (value is string str)
                 {
-                    ret = "\"" + str.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+                    ret = @"""" + Regex.Replace(str, @"[\r\t\f\v\b\n\\""'\u0085\u2028\u2029]", (match) =>
+                    {
+                        switch (match.Value[0])
+                        {
+                            case '\r': return @"\r";
+                            case '\t': return @"\t";
+                            case '\f': return @"\f";
+                            case '\v': return @"\v";
+                            case '\b': return @"\b";
+                            case '\n': return @"\n";
+                            case '\\': return @"\\";
+                            case '\"': return @"\""";
+                            case '\'': return @"\'";
+                            case '\u0085': return @"\u0085";
+                            case '\u2028': return @"\u2028";
+                            case '\u2029': return @"\u2029";
+                            default: return match.Value;
+                        }
+                    }) + @"""";
                 }
                 else
                 {
